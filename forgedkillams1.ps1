@@ -18,6 +18,11 @@ function Invoke-NullAMS1 {
         $url
     )
 
+    # If no URL was passed, ask for it
+    if (-not $url) {
+        $url = Read-Host "Enter the URL of the payload"
+    }
+
     if ($v) {
         $VerbosePreference = "Continue"
     }
